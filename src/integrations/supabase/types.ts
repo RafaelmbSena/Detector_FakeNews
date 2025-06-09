@@ -9,7 +9,45 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
-      [_ in never]: never
+      fact_checks: {
+        Row: {
+          confidence: number
+          created_at: string
+          id: string
+          input_text: string
+          justification: string
+          search_results: Json | null
+          sources: Json | null
+          status: string
+          text_hash: string
+          updated_at: string
+        }
+        Insert: {
+          confidence: number
+          created_at?: string
+          id?: string
+          input_text: string
+          justification: string
+          search_results?: Json | null
+          sources?: Json | null
+          status: string
+          text_hash: string
+          updated_at?: string
+        }
+        Update: {
+          confidence?: number
+          created_at?: string
+          id?: string
+          input_text?: string
+          justification?: string
+          search_results?: Json | null
+          sources?: Json | null
+          status?: string
+          text_hash?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
