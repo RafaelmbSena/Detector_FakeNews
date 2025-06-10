@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Search, Shield, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { Search, Shield, AlertTriangle, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
@@ -17,6 +17,7 @@ interface AnalysisResult {
     url: string;
     summary: string;
   }>;
+  cached?: boolean;
 }
 
 const Index = () => {
@@ -39,7 +40,15 @@ const Index = () => {
     try {
       const analysisResult = await analyzeText(inputText);
       setResult(analysisResult);
+      
+      if (analysisResult.cached) {
+        toast({
+          title: "Resultado encontrado",
+          description: "Esta análise foi recuperada do cache para resposta mais rápida.",
+        });
+      }
     } catch (error) {
+      console.error('Error analyzing text:', error);
       toast({
         title: "Erro",
         description: "Erro ao analisar o texto. Tente novamente.",
@@ -101,10 +110,10 @@ const Index = () => {
             </h1>
           </div>
           <p className="text-xl text-gray-600 mb-2">
-            com Inteligência Artificial
+            com Inteligência Artificial e Busca na Internet
           </p>
           <p className="text-lg text-gray-500 max-w-2xl mx-auto">
-            Cole um texto, clique em Detectar e veja a verdade por trás da informação
+            Cole um texto, clique em Detectar e veja a verdade por trás da informação com verificação em tempo real
           </p>
         </div>
 
@@ -128,12 +137,12 @@ const Index = () => {
                     {isLoading ? (
                       <>
                         <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-2" />
-                        Analisando...
+                        Verificando na Internet...
                       </>
                     ) : (
                       <>
                         <Search className="w-5 h-5 mr-2" />
-                        Detectar
+                        Detectar com IA
                       </>
                     )}
                   </Button>
@@ -153,15 +162,21 @@ const Index = () => {
                   <h2 className="text-2xl font-bold ml-3 text-gray-900">
                     {getStatusText(result.status)}
                   </h2>
-                  {result.status === 'uncertain' && (
-                    <Badge variant="outline" className="ml-4 text-lg py-1 px-3">
+                  <div className="ml-auto flex items-center space-x-2">
+                    <Badge variant="outline" className="text-lg py-1 px-3">
                       {result.confidence}% de confiança
                     </Badge>
-                  )}
+                    {result.cached && (
+                      <Badge variant="secondary" className="text-sm py-1 px-2">
+                        <Clock className="w-3 h-3 mr-1" />
+                        Cache
+                      </Badge>
+                    )}
+                  </div>
                 </div>
 
                 <div className="mb-6">
-                  <h3 className="text-lg font-semibold mb-2 text-gray-800">Justificativa:</h3>
+                  <h3 className="text-lg font-semibold mb-2 text-gray-800">Análise da IA:</h3>
                   <p className="text-gray-700 leading-relaxed">{result.justification}</p>
                 </div>
 
@@ -194,7 +209,7 @@ const Index = () => {
 
         {/* Footer */}
         <footer className="text-center mt-16 text-gray-500">
-          <p>Desenvolvido com IA para combater a desinformação</p>
+          <p>Desenvolvido com IA Gemini e verificação em tempo real na internet</p>
         </footer>
       </div>
     </div>
