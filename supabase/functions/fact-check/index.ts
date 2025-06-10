@@ -20,25 +20,76 @@ interface FactCheckResult {
   search_results: any;
 }
 
-// Simple hash function for text
+// Rate limiting storage (in-memory for simplicity)
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const RATE_LIMIT_REQUESTS = 10; // requests per minute
+const RATE_LIMIT_WINDOW = 60000; // 1 minute in milliseconds
+
+// Input sanitization function
+function sanitizeInput(text: string): string {
+  if (!text || typeof text !== 'string') {
+    throw new Error('Invalid input');
+  }
+  
+  // Remove potentially dangerous characters and normalize
+  return text
+    .replace(/[<>\"'&]/g, '') // Remove HTML/script injection chars
+    .replace(/\s+/g, ' ') // Normalize whitespace
+    .trim()
+    .substring(0, 2000); // Limit length to prevent DoS
+}
+
+// Rate limiting check
+function checkRateLimit(clientIP: string): boolean {
+  const now = Date.now();
+  const clientData = rateLimitMap.get(clientIP);
+  
+  if (!clientData || now > clientData.resetTime) {
+    rateLimitMap.set(clientIP, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+    return true;
+  }
+  
+  if (clientData.count >= RATE_LIMIT_REQUESTS) {
+    return false;
+  }
+  
+  clientData.count++;
+  return true;
+}
+
+// Secure hash function for text (improved)
 function hashText(text: string): string {
   let hash = 0;
-  for (let i = 0; i < text.length; i++) {
-    const char = text.charCodeAt(i);
+  const normalizedText = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < normalizedText.length; i++) {
+    const char = normalizedText.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;
     hash = hash & hash; // Convert to 32bit integer
   }
-  return Math.abs(hash).toString();
+  return Math.abs(hash).toString(36); // Base36 for shorter hash
+}
+
+// Validate and sanitize sources
+function sanitizeSources(sources: any[]): Array<{title: string; url: string; summary: string}> {
+  if (!Array.isArray(sources)) return [];
+  
+  return sources
+    .filter(source => source && typeof source === 'object')
+    .slice(0, 5) // Limit to 5 sources max
+    .map(source => ({
+      title: (source.title || 'Fonte não identificada').substring(0, 200),
+      url: (source.url || '#').substring(0, 500),
+      summary: (source.summary || 'Resumo não disponível').substring(0, 300)
+    }));
 }
 
 async function factCheckWithGemini(text: string): Promise<FactCheckResult> {
   const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
   
   if (!geminiApiKey) {
-    throw new Error('GEMINI_API_KEY not found');
+    throw new Error('API configuration error');
   }
 
-  // Enhanced prompt for better fact-checking with web search
   const prompt = `
 Você é um verificador de fatos profissional especializado em análise de informações em português. Analise a seguinte afirmação e determine se é verdadeira, falsa ou incerta.
 
@@ -76,7 +127,7 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
   `;
 
   try {
-    console.log('Calling Gemini API for fact-check:', text.substring(0, 100) + '...');
+    console.log('Calling Gemini API for fact-check:', text.substring(0, 50) + '...');
     
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
       method: 'POST',
@@ -117,26 +168,22 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Gemini API error:', response.status, errorText);
-      throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
+      console.error('Gemini API error:', response.status);
+      throw new Error('External service temporarily unavailable');
     }
 
     const data = await response.json();
-    console.log('Gemini API response:', JSON.stringify(data, null, 2));
-
     const geminiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!geminiResponse) {
-      throw new Error('No response from Gemini API');
+      throw new Error('No response from verification service');
     }
 
-    console.log('Gemini raw response:', geminiResponse);
+    console.log('Gemini response received successfully');
 
-    // Parse JSON from response
+    // Parse JSON from response with improved error handling
     let result;
     try {
-      // Clean the response to extract JSON
       const cleanedResponse = geminiResponse
         .replace(/```json\s*/g, '')
         .replace(/```\s*/g, '')
@@ -144,11 +191,9 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
         .replace(/}\s*[\w\s]*?$/g, '}')
         .trim();
       
-      console.log('Cleaned response for parsing:', cleanedResponse);
       result = JSON.parse(cleanedResponse);
     } catch (parseError) {
-      console.error('Failed to parse Gemini response as JSON:', parseError);
-      console.log('Attempting fallback parsing...');
+      console.error('Failed to parse response');
       
       // Fallback: extract JSON manually
       const jsonMatch = geminiResponse.match(/\{[\s\S]*\}/);
@@ -156,15 +201,14 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
         try {
           result = JSON.parse(jsonMatch[0]);
         } catch (secondParseError) {
-          console.error('Fallback parsing also failed:', secondParseError);
-          throw new Error('Could not parse Gemini response as valid JSON');
+          throw new Error('Unable to process verification response');
         }
       } else {
-        throw new Error('No JSON found in Gemini response');
+        throw new Error('Invalid response format from verification service');
       }
     }
 
-    // Validate and clean the result
+    // Validate and sanitize the result
     if (!result.status || !['real', 'fake', 'uncertain'].includes(result.status)) {
       // Analyze the response text to determine status
       const responseText = geminiResponse.toLowerCase();
@@ -182,30 +226,18 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
 
     // Ensure confidence is reasonable
     if (typeof result.confidence !== 'number' || result.confidence < 0 || result.confidence > 100) {
-      if (result.status === 'real' || result.status === 'fake') {
-        result.confidence = 80;
-      } else {
-        result.confidence = 50;
-      }
+      result.confidence = result.status === 'uncertain' ? 50 : 80;
     }
 
-    // Ensure justification exists
+    // Sanitize justification
     if (!result.justification || typeof result.justification !== 'string') {
-      result.justification = geminiResponse.includes('{') 
-        ? 'Análise realizada com base em verificação de fontes online.'
-        : geminiResponse;
+      result.justification = 'Análise realizada com base em verificação de fontes online.';
+    } else {
+      result.justification = result.justification.substring(0, 1000); // Limit length
     }
 
-    // Ensure sources array exists
-    if (!Array.isArray(result.sources)) {
-      result.sources = [
-        {
-          title: "Verificação por IA Gemini",
-          url: "https://gemini.google.com/",
-          summary: "Análise realizada pela inteligência artificial Gemini com busca na internet"
-        }
-      ];
-    }
+    // Sanitize sources
+    result.sources = sanitizeSources(result.sources || []);
 
     // Add default sources if none provided
     if (result.sources.length === 0) {
@@ -218,51 +250,30 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
       ];
     }
 
-    console.log('Final processed result:', result);
-
     return {
       status: result.status,
       confidence: result.confidence,
       justification: result.justification,
       sources: result.sources,
-      search_results: { gemini_response: geminiResponse, parsed_result: result }
+      search_results: { success: true, cached: false }
     };
 
   } catch (error) {
-    console.error('Error in factCheckWithGemini:', error);
+    console.error('Error in factCheckWithGemini:', error.message);
     
-    // Provide a more intelligent fallback
-    const errorMessage = error.message || 'Erro desconhecido';
-    let fallbackStatus: 'real' | 'fake' | 'uncertain' = 'uncertain';
-    let fallbackConfidence = 40;
-    
-    // Simple keyword analysis for fallback
-    const textLower = text.toLowerCase();
-    const suspiciousWords = ['milagre', 'cura instantânea', 'segredo que médicos não querem', 'governo esconde', 'conspiracy'];
-    const hasSuspiciousWords = suspiciousWords.some(word => textLower.includes(word));
-    
-    if (hasSuspiciousWords) {
-      fallbackStatus = 'fake';
-      fallbackConfidence = 60;
-    }
-    
+    // Provide a safe fallback without exposing internal errors
     return {
-      status: fallbackStatus,
-      confidence: fallbackConfidence,
-      justification: `Não foi possível verificar completamente a informação devido a erro técnico: ${errorMessage}. Recomenda-se consultar fontes oficiais e veículos de imprensa confiáveis para confirmação. ${hasSuspiciousWords ? 'O texto contém expressões comumente associadas a desinformação.' : ''}`,
+      status: 'uncertain' as const,
+      confidence: 30,
+      justification: 'Não foi possível verificar completamente a informação devido a dificuldades técnicas temporárias. Recomenda-se consultar fontes oficiais e veículos de imprensa confiáveis para confirmação.',
       sources: [
         {
-          title: "Recomendação de verificação manual",
+          title: "Verificação Manual Recomendada",
           url: "https://www.google.com/search?q=" + encodeURIComponent(text.substring(0, 100)),
           summary: "Consulte fontes oficiais, veículos de comunicação respeitados e órgãos competentes para verificar esta informação."
-        },
-        {
-          title: "Agências de Fact-Checking Brasileiras",
-          url: "https://www.aos.com.br/fact-checking/",
-          summary: "Consulte agências especializadas em verificação de fatos como Lupa, Aos Fatos, e outras para informações confiáveis."
         }
       ],
-      search_results: { error: errorMessage, fallback_analysis: true }
+      search_results: { error: 'Service temporarily unavailable', fallback: true }
     };
   }
 }
@@ -274,14 +285,57 @@ serve(async (req) => {
   }
 
   try {
+    // Rate limiting based on IP
+    const clientIP = req.headers.get('cf-connecting-ip') || 
+                    req.headers.get('x-forwarded-for') || 
+                    'unknown';
+    
+    if (!checkRateLimit(clientIP)) {
+      return new Response(
+        JSON.stringify({ 
+          error: 'Muitas tentativas. Aguarde um momento antes de tentar novamente.',
+          retryAfter: 60
+        }),
+        { 
+          status: 429,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    // Request size limit
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength) > 10000) { // 10KB limit
+      return new Response(
+        JSON.stringify({ error: 'Texto muito longo para análise' }),
+        { 
+          status: 413,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? ''
     );
 
-    const { text } = await req.json();
+    let requestBody;
+    try {
+      requestBody = await req.json();
+    } catch (e) {
+      return new Response(
+        JSON.stringify({ error: 'Formato de dados inválido' }),
+        { 
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    const { text } = requestBody;
     
-    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    if (!text || typeof text !== 'string') {
       return new Response(
         JSON.stringify({ error: 'Texto é obrigatório para verificação' }),
         { 
@@ -291,25 +345,53 @@ serve(async (req) => {
       );
     }
 
-    const cleanText = text.trim();
+    // Input validation and sanitization
+    let cleanText;
+    try {
+      cleanText = sanitizeInput(text);
+    } catch (e) {
+      return new Response(
+        JSON.stringify({ error: 'Texto contém caracteres inválidos ou é muito longo' }),
+        { 
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    if (cleanText.length < 10) {
+      return new Response(
+        JSON.stringify({ error: 'Texto muito curto para análise (mínimo 10 caracteres)' }),
+        { 
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
     const textHash = hashText(cleanText);
     
-    console.log('Processing fact-check request:', cleanText.substring(0, 100) + '...');
-    console.log('Text hash:', textHash);
+    console.log('Processing fact-check request, hash:', textHash);
 
-    // Check cache first
-    const { data: existingResult, error: fetchError } = await supabaseClient
-      .from('fact_checks')
-      .select('*')
-      .eq('text_hash', textHash)
-      .maybeSingle();
+    // Check cache first with error handling
+    let existingResult;
+    try {
+      const { data, error: fetchError } = await supabaseClient
+        .from('fact_checks')
+        .select('*')
+        .eq('text_hash', textHash)
+        .maybeSingle();
 
-    if (fetchError) {
-      console.error('Error fetching existing result:', fetchError);
+      if (!fetchError && data) {
+        existingResult = data;
+      }
+    } catch (e) {
+      console.error('Cache lookup failed:', e.message);
+      // Continue without cache
     }
 
     if (existingResult) {
-      console.log('Found cached result, returning...');
+      console.log('Found cached result');
       return new Response(
         JSON.stringify({
           status: existingResult.status,
@@ -324,26 +406,26 @@ serve(async (req) => {
       );
     }
 
-    console.log('No cached result found, performing new fact-check...');
+    console.log('No cached result found, performing new fact-check');
 
-    // Perform new fact check with enhanced Gemini
+    // Perform new fact check
     const result = await factCheckWithGemini(cleanText);
 
-    // Store result in database
-    const { error: insertError } = await supabaseClient
-      .from('fact_checks')
-      .insert({
-        input_text: cleanText,
-        text_hash: textHash,
-        status: result.status,
-        confidence: result.confidence,
-        justification: result.justification,
-        sources: result.sources,
-        search_results: result.search_results
-      });
-
-    if (insertError) {
-      console.error('Error storing result in database:', insertError);
+    // Store result in database (non-blocking)
+    try {
+      await supabaseClient
+        .from('fact_checks')
+        .insert({
+          input_text: cleanText.substring(0, 500), // Store limited text for privacy
+          text_hash: textHash,
+          status: result.status,
+          confidence: result.confidence,
+          justification: result.justification,
+          sources: result.sources,
+          search_results: { cached: false, timestamp: new Date().toISOString() }
+        });
+    } catch (e) {
+      console.error('Failed to cache result:', e.message);
       // Continue anyway, don't fail the request
     }
 
@@ -363,13 +445,15 @@ serve(async (req) => {
     );
 
   } catch (error) {
-    console.error('Error in fact-check function:', error);
+    console.error('Unexpected error in fact-check function:', error.message);
+    
+    // Return generic error without exposing internal details
     return new Response(
       JSON.stringify({ 
-        error: 'Erro interno do servidor: ' + error.message,
+        error: 'Erro temporário no serviço. Tente novamente em alguns instantes.',
         status: 'uncertain',
-        confidence: 30,
-        justification: 'Ocorreu um erro técnico durante a verificação. Tente novamente em alguns instantes.',
+        confidence: 20,
+        justification: 'Ocorreu um erro técnico durante a verificação. Por favor, tente novamente.',
         sources: []
       }),
       {
