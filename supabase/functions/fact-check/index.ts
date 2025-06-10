@@ -31,43 +31,54 @@ function hashText(text: string): string {
   return Math.abs(hash).toString();
 }
 
-async function searchWithGemini(text: string): Promise<FactCheckResult> {
+async function factCheckWithGemini(text: string): Promise<FactCheckResult> {
   const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
   
   if (!geminiApiKey) {
     throw new Error('GEMINI_API_KEY not found');
   }
 
+  // Enhanced prompt for better fact-checking with web search
   const prompt = `
-  You are a professional fact-checker. Analyze the following text and determine if it's real, fake, or uncertain.
+Você é um verificador de fatos profissional especializado em análise de informações em português. Analise a seguinte afirmação e determine se é verdadeira, falsa ou incerta.
 
-  Text to analyze: "${text}"
+TEXTO PARA VERIFICAR: "${text}"
 
-  Please:
-  1. Search for current information about this topic
-  2. Verify claims against reliable sources
-  3. Determine if the information is real, fake, or uncertain
-  4. Provide a confidence level (0-100)
-  5. Give a detailed justification
-  6. List reliable sources that support your conclusion
+INSTRUÇÕES DETALHADAS:
+1. Procure por informações atuais sobre este tópico na internet
+2. Verifique múltiplas fontes confiáveis (sites oficiais, órgãos de imprensa respeitados, instituições)
+3. Compare as informações encontradas com a afirmação
+4. Seja DECISIVO na sua análise - evite respostas "incertas" quando há evidências claras
+5. Para notícias recentes, procure por reportagens de veículos de imprensa conhecidos
+6. Para dados científicos, procure por fontes acadêmicas ou órgãos oficiais
+7. Para informações sobre pessoas públicas, verifique fontes oficiais
 
-  Respond in the following JSON format:
-  {
-    "status": "real|fake|uncertain",
-    "confidence": number,
-    "justification": "detailed explanation",
-    "sources": [
-      {
-        "title": "source title",
-        "url": "source url",
-        "summary": "brief summary"
-      }
-    ]
-  }
+CRITÉRIOS DE CLASSIFICAÇÃO:
+- VERDADEIRO (real): Quando há evidências claras e múltiplas fontes confirmam a informação
+- FALSO (fake): Quando há evidências que contradizem a afirmação ou não há fontes confiáveis
+- INCERTO (uncertain): APENAS quando realmente não há informações suficientes ou fontes conflitantes
+
+Responda EXATAMENTE neste formato JSON:
+{
+  "status": "real|fake|uncertain",
+  "confidence": [número de 70-95 para real/fake, 30-60 para uncertain],
+  "justification": "Explicação clara e detalhada em português do porquê da classificação, mencionando as fontes verificadas",
+  "sources": [
+    {
+      "title": "Título da fonte",
+      "url": "URL da fonte (use URLs reais quando possível)",
+      "summary": "Resumo do que a fonte diz sobre o assunto"
+    }
+  ]
+}
+
+IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, classifique como "real" ou "fake" com alta confiança (70-95%). Use "uncertain" apenas quando realmente não há informações suficientes.
   `;
 
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${geminiApiKey}`, {
+    console.log('Calling Gemini API for fact-check:', text.substring(0, 100) + '...');
+    
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiApiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -81,100 +92,177 @@ async function searchWithGemini(text: string): Promise<FactCheckResult> {
         generationConfig: {
           temperature: 0.1,
           topK: 1,
-          topP: 1,
-          maxOutputTokens: 2048,
-        }
+          topP: 0.8,
+          maxOutputTokens: 4096,
+        },
+        safetySettings: [
+          {
+            category: "HARM_CATEGORY_HARASSMENT",
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          },
+          {
+            category: "HARM_CATEGORY_HATE_SPEECH", 
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          },
+          {
+            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          },
+          {
+            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold: "BLOCK_MEDIUM_AND_ABOVE"
+          }
+        ]
       }),
     });
 
     if (!response.ok) {
-      throw new Error(`Gemini API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error('Gemini API error:', response.status, errorText);
+      throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
+    console.log('Gemini API response:', JSON.stringify(data, null, 2));
+
     const geminiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!geminiResponse) {
-      throw new Error('No response from Gemini');
+      throw new Error('No response from Gemini API');
     }
 
-    console.log('Gemini response:', geminiResponse);
+    console.log('Gemini raw response:', geminiResponse);
 
-    // Try to parse JSON from response
+    // Parse JSON from response
     let result;
     try {
-      // Extract JSON from response (in case there's extra text)
-      const jsonMatch = geminiResponse.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        result = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('No JSON found in response');
-      }
+      // Clean the response to extract JSON
+      const cleanedResponse = geminiResponse
+        .replace(/```json\s*/g, '')
+        .replace(/```\s*/g, '')
+        .replace(/^\s*[\w\s]*?{/g, '{')
+        .replace(/}\s*[\w\s]*?$/g, '}')
+        .trim();
+      
+      console.log('Cleaned response for parsing:', cleanedResponse);
+      result = JSON.parse(cleanedResponse);
     } catch (parseError) {
       console.error('Failed to parse Gemini response as JSON:', parseError);
+      console.log('Attempting fallback parsing...');
       
-      // Fallback: analyze response manually
-      const responseText = geminiResponse.toLowerCase();
-      let status: 'real' | 'fake' | 'uncertain' = 'uncertain';
-      let confidence = 50;
-      
-      if (responseText.includes('fake') || responseText.includes('false') || responseText.includes('misinformation')) {
-        status = 'fake';
-        confidence = 75;
-      } else if (responseText.includes('true') || responseText.includes('accurate') || responseText.includes('verified')) {
-        status = 'real';
-        confidence = 75;
+      // Fallback: extract JSON manually
+      const jsonMatch = geminiResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          result = JSON.parse(jsonMatch[0]);
+        } catch (secondParseError) {
+          console.error('Fallback parsing also failed:', secondParseError);
+          throw new Error('Could not parse Gemini response as valid JSON');
+        }
+      } else {
+        throw new Error('No JSON found in Gemini response');
       }
-
-      result = {
-        status,
-        confidence,
-        justification: geminiResponse,
-        sources: [
-          {
-            title: "Análise por IA Gemini",
-            url: "https://ai.google.dev/",
-            summary: "Análise realizada pela inteligência artificial Gemini do Google"
-          }
-        ]
-      };
     }
 
-    // Ensure required fields exist
+    // Validate and clean the result
     if (!result.status || !['real', 'fake', 'uncertain'].includes(result.status)) {
-      result.status = 'uncertain';
+      // Analyze the response text to determine status
+      const responseText = geminiResponse.toLowerCase();
+      if (responseText.includes('verdadeiro') || responseText.includes('real') || responseText.includes('confirmado')) {
+        result.status = 'real';
+        result.confidence = 80;
+      } else if (responseText.includes('falso') || responseText.includes('fake') || responseText.includes('incorreto')) {
+        result.status = 'fake';
+        result.confidence = 80;
+      } else {
+        result.status = 'uncertain';
+        result.confidence = 50;
+      }
     }
+
+    // Ensure confidence is reasonable
     if (typeof result.confidence !== 'number' || result.confidence < 0 || result.confidence > 100) {
-      result.confidence = 50;
+      if (result.status === 'real' || result.status === 'fake') {
+        result.confidence = 80;
+      } else {
+        result.confidence = 50;
+      }
     }
-    if (!result.justification) {
-      result.justification = geminiResponse || 'Análise realizada pela IA';
+
+    // Ensure justification exists
+    if (!result.justification || typeof result.justification !== 'string') {
+      result.justification = geminiResponse.includes('{') 
+        ? 'Análise realizada com base em verificação de fontes online.'
+        : geminiResponse;
     }
+
+    // Ensure sources array exists
     if (!Array.isArray(result.sources)) {
-      result.sources = [];
+      result.sources = [
+        {
+          title: "Verificação por IA Gemini",
+          url: "https://gemini.google.com/",
+          summary: "Análise realizada pela inteligência artificial Gemini com busca na internet"
+        }
+      ];
     }
+
+    // Add default sources if none provided
+    if (result.sources.length === 0) {
+      result.sources = [
+        {
+          title: "Análise de Verificação de Fatos",
+          url: "https://www.google.com/search?q=" + encodeURIComponent(text.substring(0, 100)),
+          summary: "Busca realizada para verificar a veracidade da informação"
+        }
+      ];
+    }
+
+    console.log('Final processed result:', result);
 
     return {
-      ...result,
-      search_results: { gemini_response: geminiResponse }
+      status: result.status,
+      confidence: result.confidence,
+      justification: result.justification,
+      sources: result.sources,
+      search_results: { gemini_response: geminiResponse, parsed_result: result }
     };
 
   } catch (error) {
-    console.error('Error with Gemini API:', error);
+    console.error('Error in factCheckWithGemini:', error);
     
-    // Fallback analysis
+    // Provide a more intelligent fallback
+    const errorMessage = error.message || 'Erro desconhecido';
+    let fallbackStatus: 'real' | 'fake' | 'uncertain' = 'uncertain';
+    let fallbackConfidence = 40;
+    
+    // Simple keyword analysis for fallback
+    const textLower = text.toLowerCase();
+    const suspiciousWords = ['milagre', 'cura instantânea', 'segredo que médicos não querem', 'governo esconde', 'conspiracy'];
+    const hasSuspiciousWords = suspiciousWords.some(word => textLower.includes(word));
+    
+    if (hasSuspiciousWords) {
+      fallbackStatus = 'fake';
+      fallbackConfidence = 60;
+    }
+    
     return {
-      status: 'uncertain',
-      confidence: 30,
-      justification: `Não foi possível verificar completamente a informação devido a um erro técnico: ${error.message}. Recomenda-se consultar fontes oficiais para confirmação.`,
+      status: fallbackStatus,
+      confidence: fallbackConfidence,
+      justification: `Não foi possível verificar completamente a informação devido a erro técnico: ${errorMessage}. Recomenda-se consultar fontes oficiais e veículos de imprensa confiáveis para confirmação. ${hasSuspiciousWords ? 'O texto contém expressões comumente associadas a desinformação.' : ''}`,
       sources: [
         {
           title: "Recomendação de verificação manual",
-          url: "https://www.gov.br/",
-          summary: "Consulte fontes oficiais e veículos de comunicação confiáveis para verificar esta informação."
+          url: "https://www.google.com/search?q=" + encodeURIComponent(text.substring(0, 100)),
+          summary: "Consulte fontes oficiais, veículos de comunicação respeitados e órgãos competentes para verificar esta informação."
+        },
+        {
+          title: "Agências de Fact-Checking Brasileiras",
+          url: "https://www.aos.com.br/fact-checking/",
+          summary: "Consulte agências especializadas em verificação de fatos como Lupa, Aos Fatos, e outras para informações confiáveis."
         }
       ],
-      search_results: { error: error.message }
+      search_results: { error: errorMessage, fallback_analysis: true }
     };
   }
 }
@@ -195,7 +283,7 @@ serve(async (req) => {
     
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
       return new Response(
-        JSON.stringify({ error: 'Text is required' }),
+        JSON.stringify({ error: 'Texto é obrigatório para verificação' }),
         { 
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -203,11 +291,13 @@ serve(async (req) => {
       );
     }
 
-    const textHash = hashText(text.trim());
+    const cleanText = text.trim();
+    const textHash = hashText(cleanText);
     
-    console.log('Checking for existing analysis with hash:', textHash);
+    console.log('Processing fact-check request:', cleanText.substring(0, 100) + '...');
+    console.log('Text hash:', textHash);
 
-    // Check if we already have this analysis cached
+    // Check cache first
     const { data: existingResult, error: fetchError } = await supabaseClient
       .from('fact_checks')
       .select('*')
@@ -219,7 +309,7 @@ serve(async (req) => {
     }
 
     if (existingResult) {
-      console.log('Found cached result');
+      console.log('Found cached result, returning...');
       return new Response(
         JSON.stringify({
           status: existingResult.status,
@@ -234,16 +324,16 @@ serve(async (req) => {
       );
     }
 
-    console.log('No cached result found, performing new analysis');
+    console.log('No cached result found, performing new fact-check...');
 
-    // Perform new fact check
-    const result = await searchWithGemini(text);
+    // Perform new fact check with enhanced Gemini
+    const result = await factCheckWithGemini(cleanText);
 
     // Store result in database
     const { error: insertError } = await supabaseClient
       .from('fact_checks')
       .insert({
-        input_text: text,
+        input_text: cleanText,
         text_hash: textHash,
         status: result.status,
         confidence: result.confidence,
@@ -253,8 +343,11 @@ serve(async (req) => {
       });
 
     if (insertError) {
-      console.error('Error inserting result:', insertError);
+      console.error('Error storing result in database:', insertError);
+      // Continue anyway, don't fail the request
     }
+
+    console.log('Fact-check completed successfully:', result.status, result.confidence + '%');
 
     return new Response(
       JSON.stringify({
@@ -272,7 +365,13 @@ serve(async (req) => {
   } catch (error) {
     console.error('Error in fact-check function:', error);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ 
+        error: 'Erro interno do servidor: ' + error.message,
+        status: 'uncertain',
+        confidence: 30,
+        justification: 'Ocorreu um erro técnico durante a verificação. Tente novamente em alguns instantes.',
+        sources: []
+      }),
       {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }

@@ -14,45 +14,67 @@ interface AnalysisResult {
 }
 
 export const analyzeText = async (text: string): Promise<AnalysisResult> => {
+  if (!text || text.trim().length === 0) {
+    throw new Error('Texto não pode estar vazio');
+  }
+
   try {
-    console.log('Calling fact-check function with text:', text.substring(0, 100) + '...');
+    console.log('Enviando texto para verificação:', text.substring(0, 100) + '...');
     
     const { data, error } = await supabase.functions.invoke('fact-check', {
-      body: { text }
+      body: { text: text.trim() }
     });
 
     if (error) {
-      console.error('Error calling fact-check function:', error);
-      throw new Error(error.message || 'Failed to analyze text');
+      console.error('Erro na função fact-check:', error);
+      throw new Error(error.message || 'Falha ao analisar o texto');
     }
 
     if (!data) {
-      throw new Error('No data returned from fact-check function');
+      throw new Error('Nenhum dado retornado da verificação');
     }
 
-    console.log('Received response from fact-check function:', data);
+    console.log('Resposta recebida da verificação:', data);
 
-    return {
+    // Validate response structure
+    const result: AnalysisResult = {
       status: data.status || 'uncertain',
-      confidence: data.confidence || 50,
+      confidence: typeof data.confidence === 'number' ? data.confidence : 50,
       justification: data.justification || 'Análise não disponível',
-      sources: data.sources || [],
+      sources: Array.isArray(data.sources) ? data.sources : [],
       cached: data.cached || false
     };
 
+    // Ensure status is valid
+    if (!['real', 'fake', 'uncertain'].includes(result.status)) {
+      result.status = 'uncertain';
+    }
+
+    // Ensure confidence is within valid range
+    if (result.confidence < 0 || result.confidence > 100) {
+      result.confidence = 50;
+    }
+
+    return result;
+
   } catch (error) {
-    console.error('Error in analyzeText:', error);
+    console.error('Erro em analyzeText:', error);
     
-    // Return a fallback response instead of throwing
+    // Return a user-friendly error response
     return {
       status: 'uncertain',
       confidence: 30,
-      justification: `Erro ao analisar o texto: ${error.message}. Tente novamente ou consulte fontes confiáveis para verificar a informação.`,
+      justification: `Erro ao verificar a informação: ${error.message}. Verifique sua conexão com a internet e tente novamente. Se o problema persistir, consulte fontes confiáveis como veículos de imprensa respeitados e órgãos oficiais.`,
       sources: [
         {
-          title: "Erro na verificação",
+          title: "Google - Pesquisa sobre o assunto",
+          url: `https://www.google.com/search?q=${encodeURIComponent(text.substring(0, 100))}`,
+          summary: "Faça uma pesquisa no Google para encontrar informações atualizadas sobre este assunto"
+        },
+        {
+          title: "Verificação Manual Recomendada",
           url: "https://www.gov.br/",
-          summary: "Ocorreu um erro técnico durante a verificação. Consulte fontes oficiais."
+          summary: "Consulte sites oficiais do governo, universidades e veículos de imprensa confiáveis para verificar a informação"
         }
       ]
     };

@@ -36,6 +36,15 @@ const Index = () => {
       return;
     }
 
+    if (inputText.trim().length < 10) {
+      toast({
+        title: "Texto muito curto",
+        description: "Por favor, insira um texto mais longo para uma análise precisa.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
     try {
       const analysisResult = await analyzeText(inputText);
@@ -46,12 +55,23 @@ const Index = () => {
           title: "Resultado encontrado",
           description: "Esta análise foi recuperada do cache para resposta mais rápida.",
         });
+      } else {
+        const statusMessage = analysisResult.status === 'real' 
+          ? "Informação verificada como verdadeira"
+          : analysisResult.status === 'fake'
+          ? "Possível fake news detectada"
+          : "Verificação concluída";
+        
+        toast({
+          title: "Verificação concluída",
+          description: statusMessage,
+        });
       }
     } catch (error) {
       console.error('Error analyzing text:', error);
       toast({
-        title: "Erro",
-        description: "Erro ao analisar o texto. Tente novamente.",
+        title: "Erro na verificação",
+        description: "Erro ao analisar o texto. Verifique sua conexão e tente novamente.",
         variant: "destructive",
       });
     } finally {
@@ -92,10 +112,16 @@ const Index = () => {
       case 'fake':
         return 'Possível Fake News';
       case 'uncertain':
-        return 'Incerto';
+        return 'Verificação Incerta';
       default:
         return '';
     }
+  };
+
+  const getConfidenceColor = (confidence: number) => {
+    if (confidence >= 80) return 'text-green-600 bg-green-100';
+    if (confidence >= 60) return 'text-yellow-600 bg-yellow-100';
+    return 'text-red-600 bg-red-100';
   };
 
   return (
@@ -113,8 +139,31 @@ const Index = () => {
             com Inteligência Artificial e Busca na Internet
           </p>
           <p className="text-lg text-gray-500 max-w-2xl mx-auto">
-            Cole um texto, clique em Detectar e veja a verdade por trás da informação com verificação em tempo real
+            Cole um texto, notícia ou informação que você deseja verificar e receba uma análise baseada em fontes confiáveis
           </p>
+        </div>
+
+        {/* Examples Section */}
+        <div className="max-w-4xl mx-auto mb-8">
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-6">
+              <h3 className="text-lg font-semibold mb-3 text-blue-800">
+                📝 Exemplos de consultas:
+              </h3>
+              <div className="grid md:grid-cols-2 gap-3 text-sm">
+                <div className="space-y-2">
+                  <p className="text-gray-700">• "Vitamina C previne totalmente a gripe"</p>
+                  <p className="text-gray-700">• "Brasil aprovou nova lei sobre renda básica"</p>
+                  <p className="text-gray-700">• "Cientistas descobriram cura para o câncer"</p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-gray-700">• "WhatsApp vai começar a cobrar mensalidade"</p>
+                  <p className="text-gray-700">• "Empresa X fechou acordo bilionário ontem"</p>
+                  <p className="text-gray-700">• "Novo benefício do governo foi aprovado"</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         {/* Search Section */}
@@ -123,26 +172,29 @@ const Index = () => {
             <CardContent className="p-6">
               <div className="space-y-4">
                 <Textarea
-                  placeholder="Cole aqui o texto, notícia ou informação que você deseja verificar..."
+                  placeholder="Cole aqui o texto, notícia ou informação que você deseja verificar... (mínimo 10 caracteres)"
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   className="min-h-[120px] text-lg border-gray-200 focus:border-blue-500 focus:ring-blue-500 resize-none"
                 />
-                <div className="flex justify-center">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-500">
+                    {inputText.length} caracteres
+                  </span>
                   <Button
                     onClick={handleAnalyze}
-                    disabled={isLoading || !inputText.trim()}
+                    disabled={isLoading || inputText.trim().length < 10}
                     className="px-8 py-3 text-lg font-semibold bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300"
                   >
                     {isLoading ? (
                       <>
                         <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-2" />
-                        Verificando na Internet...
+                        Verificando com IA...
                       </>
                     ) : (
                       <>
                         <Search className="w-5 h-5 mr-2" />
-                        Detectar com IA
+                        Verificar com IA
                       </>
                     )}
                   </Button>
@@ -163,8 +215,8 @@ const Index = () => {
                     {getStatusText(result.status)}
                   </h2>
                   <div className="ml-auto flex items-center space-x-2">
-                    <Badge variant="outline" className="text-lg py-1 px-3">
-                      {result.confidence}% de confiança
+                    <Badge className={`text-lg py-1 px-3 ${getConfidenceColor(result.confidence)}`}>
+                      {result.confidence}% confiança
                     </Badge>
                     {result.cached && (
                       <Badge variant="secondary" className="text-sm py-1 px-2">
@@ -177,31 +229,39 @@ const Index = () => {
 
                 <div className="mb-6">
                   <h3 className="text-lg font-semibold mb-2 text-gray-800">Análise da IA:</h3>
-                  <p className="text-gray-700 leading-relaxed">{result.justification}</p>
+                  <p className="text-gray-700 leading-relaxed text-base">{result.justification}</p>
                 </div>
 
                 {result.sources && result.sources.length > 0 && (
                   <div>
-                    <h3 className="text-lg font-semibold mb-4 text-gray-800">Fontes de Verificação:</h3>
+                    <h3 className="text-lg font-semibold mb-4 text-gray-800">
+                      Fontes de Verificação ({result.sources.length}):
+                    </h3>
                     <div className="space-y-3">
                       {result.sources.map((source, index) => (
-                        <Card key={index} className="border border-gray-200">
+                        <Card key={index} className="border border-gray-200 hover:border-gray-300 transition-colors">
                           <CardContent className="p-4">
                             <a
                               href={source.url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-800 font-medium text-lg mb-2 block"
+                              className="text-blue-600 hover:text-blue-800 font-medium text-lg mb-2 block hover:underline"
                             >
                               {source.title}
                             </a>
-                            <p className="text-gray-600">{source.summary}</p>
+                            <p className="text-gray-600 leading-relaxed">{source.summary}</p>
                           </CardContent>
                         </Card>
                       ))}
                     </div>
                   </div>
                 )}
+
+                <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-600">
+                    💡 <strong>Dica:</strong> Sempre consulte múltiplas fontes confiáveis e veículos de imprensa respeitados para verificar informações importantes.
+                  </p>
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -210,6 +270,7 @@ const Index = () => {
         {/* Footer */}
         <footer className="text-center mt-16 text-gray-500">
           <p>Desenvolvido com IA Gemini e verificação em tempo real na internet</p>
+          <p className="text-sm mt-2">Resultados baseados em análise automatizada - sempre consulte fontes oficiais</p>
         </footer>
       </div>
     </div>
