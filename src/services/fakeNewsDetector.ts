@@ -1,5 +1,5 @@
 
-import { supabase } from '@/integrations/supabase/client';
+
 
 interface AnalysisResult {
   status: 'real' | 'fake' | 'uncertain';
@@ -46,24 +46,26 @@ export const analyzeText = async (text: string): Promise<AnalysisResult> => {
   try {
     console.log('Enviando texto para verificação (primeiros 50 chars):', cleanText.substring(0, 50) + '...');
     
-    const { data, error } = await supabase.functions.invoke('fact-check', {
-      body: { text: cleanText }
+    const response = await fetch('https://qcffnueckcyhgmzosooy.supabase.co/functions/v1/fact-check', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjZmZudWVja2N5aGdtem9zb295Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk0OTgxODAsImV4cCI6MjA2NTA3NDE4MH0.03-pDWzivWR6hUVy-WqEba5iFvNRTNQOXlBP9EWaZ9U'
+      },
+      body: JSON.stringify({ text: cleanText })
     });
 
-    if (error) {
-      console.error('Erro na função fact-check:', error);
-      
-      // Handle specific error types
-      if (error.message?.includes('429')) {
+    if (!response.ok) {
+      if (response.status === 429) {
         throw new Error('Muitas tentativas. Aguarde um momento antes de tentar novamente.');
       }
-      
-      if (error.message?.includes('413')) {
+      if (response.status === 413) {
         throw new Error('Texto muito longo para análise.');
       }
-      
       throw new Error('Falha temporária na verificação. Tente novamente em alguns instantes.');
     }
+
+    const data = await response.json();
 
     if (!data) {
       throw new Error('Nenhum dado retornado da verificação');
@@ -80,7 +82,7 @@ export const analyzeText = async (text: string): Promise<AnalysisResult> => {
         ? data.justification.substring(0, 1000) 
         : 'Análise não disponível',
       sources: Array.isArray(data.sources) ? data.sources.slice(0, 5) : [],
-      cached: Boolean(data.cached)
+      cached: false
     };
 
     return result;
