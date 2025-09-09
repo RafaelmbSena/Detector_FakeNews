@@ -90,39 +90,53 @@ async function factCheckWithGemini(text: string): Promise<FactCheckResult> {
   }
 
   const prompt = `
-Você é um verificador de fatos profissional especializado em análise de informações em português. Analise a seguinte afirmação e determine se é verdadeira, falsa ou incerta.
+ROLE
+You are a cautious fact-checking assistant. Your job is to classify the user's text into {true, false, uncertain} and explain briefly, with realistic confidence calibration.
 
-TEXTO PARA VERIFICAR: "${text}"
+INPUTS
+- USER_TEXT: "${text}"
 
-INSTRUÇÕES DETALHADAS:
-1. Procure por informações atuais sobre este tópico na internet
-2. Verifique múltiplas fontes confiáveis (sites oficiais, órgãos de imprensa respeitados, instituições)
-3. Compare as informações encontradas com a afirmação
-4. Seja DECISIVO na sua análise - evite respostas "incertas" quando há evidências claras
-5. Para notícias recentes, procure por reportagens de veículos de imprensa conhecidos
-6. Para dados científicos, procure por fontes acadêmicas ou órgãos oficiais
-7. Para informações sobre pessoas públicas, verifique fontes oficiais
+DEFINITIONS
+- "Verifiable claim": a concrete, checkable factual statement (specific entity/time/quantity/causal relation).
+- "Uncertain": either (a) no verifiable claim, or (b) evidence is insufficient/ambiguous/contradictory within the provided material.
 
-CRITÉRIOS DE CLASSIFICAÇÃO:
-- VERDADEIRO (real): Quando há evidências claras e múltiplas fontes confirmam a informação
-- FALSO (fake): Quando há evidências que contradizem a afirmação ou não há fontes confiáveis
-- INCERTO (uncertain): APENAS quando realmente não há informações suficientes ou fontes conflitantes
+DECISION RULES
+1) Claim extraction: Identify up to 3 verifiable claims in USER_TEXT. If none, return class="uncertain" (confidence ≤ 40) and explain briefly why (e.g., vague, no entity/date/number).
+2) Specificity check (vagueness rule): If the core claim lacks specific entity/date/measure ("University X", "Experts say", "Company X"), prefer class="uncertain" and cap confidence at 50.
+3) Cross-check sources:
+   - First use evidence inside USER_TEXT and WEB_SNIPPETS (if provided). Do not invent citations or links.
+   - Compare with FACT_TABLE (if provided). If USER_TEXT contradicts FACT_TABLE on a stable fact, set class="false" (unless WEB_SNIPPETS credibly overturn that fact) and explain the conflict.
+4) Red flags (weigh toward "false" unless strong counter-evidence is present):
+   - Absolutes: "everyone", "100%", "guaranteed", "definitive cure".
+   - Sensational claims with immediate timeframes: "starting tomorrow", "today for all".
+   - Strong causal claims without data: "X prevents/causes Y".
+5) Choose one class: "true" | "false" | "uncertain".
 
-Responda EXATAMENTE neste formato JSON:
+CONFIDENCE CALIBRATION (0–100)
+Start at 60, then adjust (clamp 0–100). Always vary confidence—avoid repeating the same number.
++20 textbook-level consensus fact (e.g., boiling point at sea level), consistent WEB_SNIPPETS.
++10 multiple independent reliable snippets agree.
+−20 absolute/generalized language with no data.
+−25 extraordinary/sensational claim without strong evidence.
+−15 conflicting snippets or unclear measurement/context.
+−20 vague/unspecified entity or no numeric/time anchor (also consider class="uncertain").
+Caps:
+- If class="uncertain" ⇒ confidence ≤ 50.
+- If only USER_TEXT and no corroboration ⇒ cap at 75.
+- If contradicting FACT_TABLE without strong evidence ⇒ confidence ≥ 70 for "false" with a short note about the conflict.
+
+OUTPUT (JSON only; no extra keys, no markdown):
 {
-  "status": "real|fake|uncertain",
-  "confidence": [número de 70-95 para real/fake, 30-60 para uncertain],
-  "justification": "Explicação clara e detalhada em português do porquê da classificação, mencionando as fontes verificadas",
-  "sources": [
-    {
-      "title": "Título da fonte",
-      "url": "URL da fonte (use URLs reais quando possível)",
-      "summary": "Resumo do que a fonte diz sobre o assunto"
-    }
-  ]
+  "classe": "true|false|uncertain",
+  "confianca": <integer 0-100>,
+  "justificativa": "2–4 neutral sentences using evidence from USER_TEXT and/or WEB_SNIPPETS. Mention key quoted words/phrases that drove the decision. No links.",
+  "trechos": ["short literal quotes from USER_TEXT that support your decision"]
 }
 
-IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, classifique como "real" ou "fake" com alta confiança (70-95%). Use "uncertain" apenas quando realmente não há informações suficientes.
+STYLE & GUARDRAILS
+- Be concise, neutral and cautious. Don't fabricate sources, statistics, or links.
+- If evidence is thin or contradictory, prefer "uncertain" with low confidence.
+- Do not reveal hidden reasoning steps; only return the JSON above.
   `;
 
   try {
@@ -207,40 +221,55 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
       }
     }
 
+    // Map new format to expected format
+    const mappedResult = {
+      status: result.classe === 'true' ? 'real' : result.classe === 'false' ? 'fake' : 'uncertain',
+      confidence: result.confianca || 50,
+      justification: result.justificativa || 'Análise realizada com base em verificação de fontes online.',
+      sources: [],
+      trechos: result.trechos || []
+    };
+
     // Validate and sanitize the result
-    if (!result.status || !['real', 'fake', 'uncertain'].includes(result.status)) {
+    if (!mappedResult.status || !['real', 'fake', 'uncertain'].includes(mappedResult.status)) {
       // Analyze the response text to determine status
       const responseText = geminiResponse.toLowerCase();
-      if (responseText.includes('verdadeiro') || responseText.includes('real') || responseText.includes('confirmado')) {
-        result.status = 'real';
-        result.confidence = 80;
-      } else if (responseText.includes('falso') || responseText.includes('fake') || responseText.includes('incorreto')) {
-        result.status = 'fake';
-        result.confidence = 80;
+      if (responseText.includes('verdadeiro') || responseText.includes('real') || responseText.includes('confirmado') || responseText.includes('true')) {
+        mappedResult.status = 'real';
+        mappedResult.confidence = 80;
+      } else if (responseText.includes('falso') || responseText.includes('fake') || responseText.includes('incorreto') || responseText.includes('false')) {
+        mappedResult.status = 'fake';
+        mappedResult.confidence = 80;
       } else {
-        result.status = 'uncertain';
-        result.confidence = 50;
+        mappedResult.status = 'uncertain';
+        mappedResult.confidence = 50;
       }
     }
 
     // Ensure confidence is reasonable
-    if (typeof result.confidence !== 'number' || result.confidence < 0 || result.confidence > 100) {
-      result.confidence = result.status === 'uncertain' ? 50 : 80;
+    if (typeof mappedResult.confidence !== 'number' || mappedResult.confidence < 0 || mappedResult.confidence > 100) {
+      mappedResult.confidence = mappedResult.status === 'uncertain' ? 50 : 80;
     }
 
     // Sanitize justification
-    if (!result.justification || typeof result.justification !== 'string') {
-      result.justification = 'Análise realizada com base em verificação de fontes online.';
+    if (!mappedResult.justification || typeof mappedResult.justification !== 'string') {
+      mappedResult.justification = 'Análise realizada com base em verificação de fontes online.';
     } else {
-      result.justification = result.justification.substring(0, 1000); // Limit length
+      mappedResult.justification = mappedResult.justification.substring(0, 1000); // Limit length
     }
 
-    // Sanitize sources
-    result.sources = sanitizeSources(result.sources || []);
+    // Create sources based on trechos if available
+    if (mappedResult.trechos && mappedResult.trechos.length > 0) {
+      mappedResult.sources = mappedResult.trechos.slice(0, 3).map((trecho, index) => ({
+        title: `Trecho Analisado ${index + 1}`,
+        url: "https://www.google.com/search?q=" + encodeURIComponent(trecho.substring(0, 100)),
+        summary: `"${trecho.substring(0, 200)}..." - Trecho do texto analisado`
+      }));
+    }
 
     // Add default sources if none provided
-    if (result.sources.length === 0) {
-      result.sources = [
+    if (mappedResult.sources.length === 0) {
+      mappedResult.sources = [
         {
           title: "Análise de Verificação de Fatos",
           url: "https://www.google.com/search?q=" + encodeURIComponent(text.substring(0, 100)),
@@ -250,10 +279,10 @@ IMPORTANTE: Seja confiante na sua análise. Se encontrar evidências claras, cla
     }
 
     return {
-      status: result.status,
-      confidence: result.confidence,
-      justification: result.justification,
-      sources: result.sources,
+      status: mappedResult.status,
+      confidence: mappedResult.confidence,
+      justification: mappedResult.justification,
+      sources: mappedResult.sources,
       search_results: { success: true, cached: false }
     };
 
