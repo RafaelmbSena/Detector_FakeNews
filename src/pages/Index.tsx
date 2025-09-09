@@ -136,10 +136,10 @@ const Index = () => {
             </h1>
           </div>
           <p className="text-xl text-gray-600 mb-2">
-            com Análise Inteligente de Padrões Linguísticos
+            com Inteligência Artificial e Busca na Internet
           </p>
           <p className="text-lg text-gray-500 max-w-2xl mx-auto">
-            Cole um texto, notícia ou informação que você deseja verificar e receba uma análise baseada em padrões linguísticos e fatos conhecidos
+            Cole um texto, notícia ou informação que você deseja verificar e receba uma análise baseada em fontes confiáveis
           </p>
         </div>
 
@@ -189,12 +189,12 @@ const Index = () => {
                     {isLoading ? (
                       <>
                         <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-2" />
-                        Analisando texto...
+                        Verificando com IA...
                       </>
                     ) : (
                       <>
                         <Search className="w-5 h-5 mr-2" />
-                        Analisar Texto
+                        Verificar com IA
                       </>
                     )}
                   </Button>
@@ -228,7 +228,7 @@ const Index = () => {
                 </div>
 
                 <div className="mb-6">
-                  <h3 className="text-lg font-semibold mb-2 text-gray-800">Análise do Sistema:</h3>
+                  <h3 className="text-lg font-semibold mb-2 text-gray-800">Análise da IA:</h3>
                   <p className="text-gray-700 leading-relaxed text-base">{result.justification}</p>
                 </div>
 
@@ -269,8 +269,8 @@ const Index = () => {
 
         {/* Footer */}
         <footer className="text-center mt-16 text-gray-500">
-          <p>Desenvolvido com análise inteligente de padrões linguísticos e base de fatos brasileiros</p>
-          <p className="text-sm mt-2">Resultados baseados em análise automatizada - sempre consulte fontes oficiais para confirmação</p>
+          <p>Desenvolvido com IA Gemini e verificação em tempo real na internet</p>
+          <p className="text-sm mt-2">Resultados baseados em análise automatizada - sempre consulte fontes oficiais</p>
         </footer>
       </div>
     </div>
