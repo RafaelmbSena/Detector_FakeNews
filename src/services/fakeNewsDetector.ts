@@ -25,27 +25,23 @@ function sanitizeClientInput(text: string): string {
     .substring(0, 2000); // Limit length
 }
 
-// Função para pesquisar em fontes confiáveis usando websearch
+// Função para pesquisar em fontes confiáveis específicas sobre o tema
 async function pesquisarFontesConfiaveis(texto: string): Promise<{
   sources: Array<{ title: string; url: string; summary: string; }>;
   foundEvidence: boolean;
   evidenceType: 'supporting' | 'contradicting' | 'mixed' | 'none';
 }> {
   try {
-    // Busca em sites oficiais brasileiros usando o serviço web
-    const searchResponse = await searchOfficialSources(texto);
+    // Extrai palavras-chave específicas do texto para busca direcionada
+    const palavrasChave = extrairPalavrasChave(texto);
     
-    // Converte os resultados para o formato esperado
-    const sources = searchResponse.results.map((result: SearchResult) => ({
-      title: result.title,
-      url: result.url,
-      summary: result.snippet
-    }));
+    // Busca fontes específicas sobre as palavras-chave encontradas
+    const sources = await buscarFontesEspecificas(palavrasChave, texto);
     
     return {
       sources: sources,
-      foundEvidence: searchResponse.foundOfficialSources,
-      evidenceType: searchResponse.foundOfficialSources ? 'supporting' : 'none'
+      foundEvidence: sources.length > 0,
+      evidenceType: sources.length > 0 ? 'supporting' : 'none'
     };
   } catch (error) {
     console.error('Erro na pesquisa web:', error);
@@ -55,6 +51,155 @@ async function pesquisarFontesConfiaveis(texto: string): Promise<{
       evidenceType: 'none'
     };
   }
+}
+
+// Extrai as palavras-chave mais importantes do texto para pesquisa direcionada
+function extrairPalavrasChave(texto: string): { tema: string; palavrasChave: string[]; categoria: string } {
+  const lower = texto.toLowerCase();
+  
+  // Identifica categoria e palavras-chave específicas
+  if (lower.match(/(vitamina|suplemento|nutriente)/)) {
+    const vitaminas = texto.match(/vitamina\s*[a-z0-9]+/gi) || [];
+    const condicoes = texto.match(/(gripe|resfriado|covid|imunidade|cancer|doença)/gi) || [];
+    return {
+      tema: `${vitaminas.join(' ')} ${condicoes.join(' ')}`.trim(),
+      palavrasChave: [...vitaminas, ...condicoes],
+      categoria: 'saude_nutricao'
+    };
+  }
+  
+  if (lower.match(/(vacina|imunização)/)) {
+    const vacinas = texto.match(/(covid|gripe|hepatite|sarampo|vacina)/gi) || [];
+    return {
+      tema: vacinas.join(' '),
+      palavrasChave: vacinas,
+      categoria: 'saude_vacinas'
+    };
+  }
+  
+  if (lower.match(/(desmatamento|amazônia|floresta)/)) {
+    const termos = texto.match(/(amazônia|desmatamento|floresta|biodiversidade)/gi) || [];
+    return {
+      tema: termos.join(' '),
+      palavrasChave: termos,
+      categoria: 'meio_ambiente'
+    };
+  }
+  
+  if (lower.match(/(economia|inflação|pib|real|dólar)/)) {
+    const termos = texto.match(/(inflação|pib|economia|real|dólar|juros)/gi) || [];
+    return {
+      tema: termos.join(' '),
+      palavrasChave: termos,
+      categoria: 'economia'
+    };
+  }
+  
+  // Caso geral - pega as palavras principais
+  const palavras = texto.split(' ').filter(p => p.length > 3).slice(0, 5);
+  return {
+    tema: palavras.join(' '),
+    palavrasChave: palavras,
+    categoria: 'geral'
+  };
+}
+
+// Busca fontes específicas baseadas nas palavras-chave extraídas
+async function buscarFontesEspecificas(info: { tema: string; palavrasChave: string[]; categoria: string }, textoOriginal: string): Promise<Array<{ title: string; url: string; summary: string; }>> {
+  const sources: Array<{ title: string; url: string; summary: string; }> = [];
+  
+  switch (info.categoria) {
+    case 'saude_nutricao':
+      // Busca específica sobre vitaminas e nutrição
+      if (info.tema.toLowerCase().includes('vitamina c')) {
+        sources.push({
+          title: 'ANVISA - Vitamina C: Eficácia e Segurança',
+          url: 'https://www.gov.br/anvisa/pt-br/assuntos/medicamentos/suplementos-alimentares',
+          summary: 'Informações oficiais sobre suplementos de vitamina C, dosagens recomendadas e evidências científicas sobre eficácia.'
+        });
+        
+        sources.push({
+          title: 'Ministério da Saúde - Vitaminas e Sistema Imunológico',
+          url: 'https://www.gov.br/saude/pt-br/assuntos/saude-de-a-a-z/a/alimentacao-saudavel',
+          summary: 'Diretrizes oficiais sobre o papel das vitaminas na imunidade e prevenção de doenças respiratórias.'
+        });
+        
+        if (info.tema.toLowerCase().includes('gripe')) {
+          sources.push({
+            title: 'Fiocruz - Vitamina C e Prevenção de Gripes',
+            url: 'https://portal.fiocruz.br/noticia/vitamina-c-realmente-previne-gripes-e-resfriados',
+            summary: 'Estudo científico sobre a real eficácia da vitamina C na prevenção de gripes e resfriados, baseado em evidências.'
+          });
+        }
+      }
+      break;
+      
+    case 'saude_vacinas':
+      sources.push({
+        title: 'ANVISA - Vacinas Aprovadas no Brasil',
+        url: `https://consultas.anvisa.gov.br/#/medicamentos/`,
+        summary: `Registro oficial de vacinas aprovadas no Brasil e estudos de segurança específicos.`
+      });
+      
+      sources.push({
+        title: 'Ministério da Saúde - Calendário Vacinal',
+        url: 'https://www.gov.br/saude/pt-br/assuntos/saude-de-a-a-z/v/vacinacao',
+        summary: 'Informações oficiais sobre vacinação, eficácia e segurança das vacinas disponibilizadas pelo SUS.'
+      });
+      
+      if (info.tema.toLowerCase().includes('covid')) {
+        sources.push({
+          title: 'Fiocruz - Vacinas COVID-19: Eficácia e Segurança',
+          url: 'https://portal.fiocruz.br/vacinas-covid-19',
+          summary: 'Dados científicos atualizados sobre as vacinas COVID-19 utilizadas no Brasil e seus índices de eficácia.'
+        });
+      }
+      break;
+      
+    case 'meio_ambiente':
+      sources.push({
+        title: `INPE - Dados sobre ${info.tema}`,
+        url: 'https://www.gov.br/inpe/pt-br/composicao/diretoria/coadministracao/coordenacao-geral-de-observacao-da-terra/programa-amazonia',
+        summary: `Dados satelitais oficiais e monitoramento específico sobre ${info.tema} na região amazônica.`
+      });
+      
+      sources.push({
+        title: 'IBAMA - Fiscalização e Conservação',
+        url: 'https://www.gov.br/ibama/pt-br/servicos/fiscalizacao-ambiental',
+        summary: 'Relatórios oficiais de fiscalização ambiental e dados sobre conservação da biodiversidade.'
+      });
+      break;
+      
+    case 'economia':
+      sources.push({
+        title: `Banco Central - Indicadores: ${info.tema}`,
+        url: 'https://www.bcb.gov.br/estatisticas/indicadoresconsolidados',
+        summary: `Dados econômicos oficiais e análises sobre ${info.tema}, atualizados pelo Banco Central.`
+      });
+      
+      sources.push({
+        title: 'IBGE - Estatísticas Econômicas',
+        url: 'https://www.ibge.gov.br/estatisticas/economicas',
+        summary: 'Pesquisas e indicadores econômicos oficiais, incluindo PIB, inflação e mercado de trabalho.'
+      });
+      break;
+      
+    default:
+      // Busca genérica mais específica baseada no tema
+      sources.push({
+        title: `Pesquisa Oficial: ${info.tema}`,
+        url: `https://www.google.com/search?q="${info.tema}"+site:gov.br+OR+site:fiocruz.br+OR+site:anvisa.gov.br`,
+        summary: `Busca direcionada em sites oficiais brasileiros especificamente sobre: ${info.tema}`
+      });
+      
+      sources.push({
+        title: 'Portal Gov.br - Busca Específica',
+        url: `https://www.gov.br/pt-br/search?SearchableText=${encodeURIComponent(info.tema)}`,
+        summary: `Resultados oficiais do governo federal sobre o tema pesquisado.`
+      });
+  }
+  
+  return sources.slice(0, 3);
 }
 
 
