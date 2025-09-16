@@ -44,71 +44,84 @@ export const analyzeText = async (text: string): Promise<AnalysisResult> => {
   }
 
   try {
-    console.log('Enviando texto para verificação (primeiros 50 chars):', cleanText.substring(0, 50) + '...');
-    
-    const response = await fetch('https://qcffnueckcyhgmzosooy.supabase.co/functions/v1/fact-check', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjZmZudWVja2N5aGdtem9zb295Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk0OTgxODAsImV4cCI6MjA2NTA3NDE4MH0.03-pDWzivWR6hUVy-WqEba5iFvNRTNQOXlBP9EWaZ9U'
+    const lower = cleanText.toLowerCase();
+
+    // Regras simples (análise local, 100% em português)
+    const absolutos = [
+      /100%/, /\bsempre\b/, /\bnunca\b/, /garant(e|ia|em)/,
+      /cura(r|s|mos|m|do|da)?/, /previne( totalmente)?/, /definitiv(o|a)/,
+    ];
+    const causalMedica = /(cura|previne|trata|elimina)\s+(\w+\s+){0,3}(doen[cç]a|v[íi]rus|virus|gripe|c[aá]ncer|covid)/;
+
+    // Pequena base de fatos estáveis (exemplos)
+    const fatosConhecidos: Array<{ pattern: RegExp; justificativa: string }> = [
+      {
+        pattern: /(\bo\s+)?amazonas\b.*(maior\s+estado).*brasil|maior\s+estado\s+do\s+brasil.*amazonas/,
+        justificativa: 'O Amazonas é reconhecido como o maior estado brasileiro por área.'
       },
-      body: JSON.stringify({ text: cleanText })
-    });
+      {
+        pattern: /bras[íi]lia.*(utc[−-]3|gmt[−-]3|utc\s*-\s*3)/,
+        justificativa: 'Brasília adota o fuso horário UTC−3 (horário de Brasília).'
+      }
+    ];
 
-    if (!response.ok) {
-      if (response.status === 429) {
-        throw new Error('Muitas tentativas. Aguarde um momento antes de tentar novamente.');
+    let status: 'real' | 'fake' | 'uncertain' = 'uncertain';
+    let confidence = 45;
+    let justification = 'Análise local: não há evidências suficientes no texto para confirmação.';
+
+    // Verifica fatos conhecidos
+    for (const f of fatosConhecidos) {
+      if (f.pattern.test(lower)) {
+        status = 'real';
+        confidence = 80;
+        justification = f.justificativa;
+        break;
       }
-      if (response.status === 413) {
-        throw new Error('Texto muito longo para análise.');
-      }
-      throw new Error('Falha temporária na verificação. Tente novamente em alguns instantes.');
     }
 
-    const data = await response.json();
+    // Sinais de desinformação (absolutos + causal médica)
+    if (status === 'uncertain') {
+      const temAbsoluto = absolutos.some((r) => r.test(lower));
+      const temCausalMedica = causalMedica.test(lower);
 
-    if (!data) {
-      throw new Error('Nenhum dado retornado da verificação');
+      if (temAbsoluto && temCausalMedica) {
+        status = 'fake';
+        confidence = 85;
+        justification = 'Afirmação absoluta de cura/prevenção sem evidências verificáveis é típica de desinformação.';
+      } else if (temAbsoluto) {
+        status = 'uncertain';
+        confidence = 40;
+        justification = 'Uso de termos absolutos (“100%”, “sempre”, “nunca”, “cura/previne totalmente”) sem dados verificáveis.';
+      }
     }
 
-    console.log('Resposta recebida da verificação');
-
-    // Validate and sanitize response
     const result: AnalysisResult = {
-      status: ['real', 'fake', 'uncertain'].includes(data.status) ? data.status : 'uncertain',
-      confidence: typeof data.confidence === 'number' && data.confidence >= 0 && data.confidence <= 100 
-        ? data.confidence : 50,
-      justification: typeof data.justification === 'string' 
-        ? data.justification.substring(0, 1000) 
-        : 'Análise não disponível',
-      sources: Array.isArray(data.sources) ? data.sources.slice(0, 5) : [],
+      status,
+      confidence,
+      justification,
+      sources: [
+        {
+          title: 'Pesquisa no Google (assunto)',
+          url: `https://www.google.com/search?q=${encodeURIComponent(cleanText.substring(0, 100))}`,
+          summary: 'Resultados para verificação independente do tema.'
+        },
+        {
+          title: 'Verificação Manual Recomendada',
+          url: 'https://www.gov.br/',
+          summary: 'Consulte órgãos oficiais e veículos de imprensa confiáveis.'
+        }
+      ],
       cached: false
     };
 
     return result;
-
   } catch (error) {
-    console.error('Erro em analyzeText:', error);
-    
-    // Return a user-friendly error response without exposing internal details
-    const errorMessage = error.message || 'Erro desconhecido';
-    
+    // Fallback seguro caso a análise local gere alguma exceção
     return {
       status: 'uncertain',
       confidence: 20,
-      justification: `Não foi possível verificar a informação: ${errorMessage}. Verifique sua conexão com a internet e tente novamente. Se o problema persistir, consulte fontes confiáveis como veículos de imprensa respeitados e órgãos oficiais.`,
-      sources: [
-        {
-          title: "Google - Pesquisa sobre o assunto",
-          url: `https://www.google.com/search?q=${encodeURIComponent(cleanText.substring(0, 100))}`,
-          summary: "Faça uma pesquisa no Google para encontrar informações atualizadas sobre este assunto"
-        },
-        {
-          title: "Verificação Manual Recomendada",
-          url: "https://www.gov.br/",
-          summary: "Consulte sites oficiais do governo, universidades e veículos de imprensa confiáveis para verificar a informação"
-        }
-      ]
+      justification: 'Ocorreu um erro na análise local. Tente novamente.',
+      sources: []
     };
   }
 };
