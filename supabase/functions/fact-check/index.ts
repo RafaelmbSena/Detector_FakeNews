@@ -1,6 +1,7 @@
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -314,6 +315,11 @@ serve(async (req) => {
       );
     }
 
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+    );
+
     let requestBody;
     try {
       requestBody = await req.json();
@@ -363,10 +369,65 @@ serve(async (req) => {
       );
     }
 
-    console.log('Processing fact-check request for text:', cleanText.substring(0, 50) + '...');
+    const textHash = hashText(cleanText);
+    
+    console.log('Processing fact-check request, hash:', textHash);
 
-    // Perform fact check
+    // Check cache first with error handling
+    let existingResult;
+    try {
+      const { data, error: fetchError } = await supabaseClient
+        .from('fact_checks')
+        .select('*')
+        .eq('text_hash', textHash)
+        .maybeSingle();
+
+      if (!fetchError && data) {
+        existingResult = data;
+      }
+    } catch (e) {
+      console.error('Cache lookup failed:', e.message);
+      // Continue without cache
+    }
+
+    if (existingResult) {
+      console.log('Found cached result');
+      return new Response(
+        JSON.stringify({
+          status: existingResult.status,
+          confidence: existingResult.confidence,
+          justification: existingResult.justification,
+          sources: existingResult.sources || [],
+          cached: true
+        }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    console.log('No cached result found, performing new fact-check');
+
+    // Perform new fact check
     const result = await factCheckWithGemini(cleanText);
+
+    // Store result in database (non-blocking)
+    try {
+      await supabaseClient
+        .from('fact_checks')
+        .insert({
+          input_text: cleanText.substring(0, 500), // Store limited text for privacy
+          text_hash: textHash,
+          status: result.status,
+          confidence: result.confidence,
+          justification: result.justification,
+          sources: result.sources,
+          search_results: { cached: false, timestamp: new Date().toISOString() }
+        });
+    } catch (e) {
+      console.error('Failed to cache result:', e.message);
+      // Continue anyway, don't fail the request
+    }
 
     console.log('Fact-check completed successfully:', result.status, result.confidence + '%');
 
