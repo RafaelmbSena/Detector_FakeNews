@@ -1,23 +1,20 @@
 
 import React, { useState } from 'react';
-import { Search, Shield, AlertTriangle, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { Search, Shield, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { analyzeText } from '@/services/fakeNewsDetector';
 
 interface AnalysisResult {
   status: 'real' | 'fake' | 'uncertain';
-  confidence: number;
   justification: string;
   sources?: Array<{
     title: string;
     url: string;
     summary: string;
   }>;
-  cached?: boolean;
 }
 
 const Index = () => {
@@ -50,23 +47,16 @@ const Index = () => {
       const analysisResult = await analyzeText(inputText);
       setResult(analysisResult);
       
-      if (analysisResult.cached) {
-        toast({
-          title: "Resultado encontrado",
-          description: "Esta análise foi recuperada do cache para resposta mais rápida.",
-        });
-      } else {
-        const statusMessage = analysisResult.status === 'real' 
-          ? "Informação verificada como verdadeira"
-          : analysisResult.status === 'fake'
-          ? "Possível fake news detectada"
-          : "Verificação concluída";
-        
-        toast({
-          title: "Verificação concluída",
-          description: statusMessage,
-        });
-      }
+      const statusMessage = analysisResult.status === 'real' 
+        ? "Informação verificada como verdadeira"
+        : analysisResult.status === 'fake'
+        ? "Possível fake news detectada"
+        : "Verificação concluída";
+      
+      toast({
+        title: "Verificação concluída",
+        description: statusMessage,
+      });
     } catch (error) {
       console.error('Error analyzing text:', error);
       toast({
@@ -118,11 +108,6 @@ const Index = () => {
     }
   };
 
-  const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 80) return 'text-green-600 bg-green-100';
-    if (confidence >= 60) return 'text-yellow-600 bg-yellow-100';
-    return 'text-red-600 bg-red-100';
-  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
@@ -214,17 +199,6 @@ const Index = () => {
                   <h2 className="text-2xl font-bold ml-3 text-gray-900">
                     {getStatusText(result.status)}
                   </h2>
-                  <div className="ml-auto flex items-center space-x-2">
-                    <Badge className={`text-lg py-1 px-3 ${getConfidenceColor(result.confidence)}`}>
-                      {result.confidence}% confiança
-                    </Badge>
-                    {result.cached && (
-                      <Badge variant="secondary" className="text-sm py-1 px-2">
-                        <Clock className="w-3 h-3 mr-1" />
-                        Cache
-                      </Badge>
-                    )}
-                  </div>
                 </div>
 
                 <div className="mb-6">
@@ -269,7 +243,7 @@ const Index = () => {
 
         {/* Footer */}
         <footer className="text-center mt-16 text-gray-500">
-          <p>Desenvolvido com IA Gemini e verificação em tempo real na internet</p>
+          <p>Detector de Fake News com Inteligência Artificial</p>
           <p className="text-sm mt-2">Resultados baseados em análise automatizada - sempre consulte fontes oficiais</p>
         </footer>
       </div>
